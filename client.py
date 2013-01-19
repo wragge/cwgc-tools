@@ -1,5 +1,15 @@
 from bs4 import BeautifulSoup
 from urllib2 import urlopen, Request, HTTPError
+import urllib
+import mechanize
+import sys
+import cookielib
+
+import logging
+
+logger = logging.getLogger("mechanize")
+logger.addHandler(logging.StreamHandler(sys.stdout))
+logger.setLevel(logging.DEBUG)
 
 
 class CWGCClient():
@@ -45,7 +55,32 @@ class CWGCClient():
                 'Grave Reference',
             ]
 
+    FORM_FIELDS = {
+        'surname': 'ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$txtSurname',
+        'forename_initials': 'ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$ForenameInitials',
+        'forename': 'ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$txtForename',
+        'war': 'ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$ddlWar',
+        'australian': 'ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$chkAustralian',
+        'service_number': 'ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$txtServiceNumber'
+    }
+
+    RESULTS_FIELDS = [
+        'name',
+        'rank',
+        'service_number',
+        'date_of_death',
+        'age',
+        'service',
+        'country',
+        'grave_reference',
+        'cemetery'
+    ]
+
     CWGC_URL = 'http://www.cwgc.org'
+    SEARCH_URL = 'http://www.cwgc.org/find-war-dead.aspx'
+
+    def __init__(self):
+        self.br = None
 
     def _get_field_value(self, soup, field):
         ''' Get the value of a field. '''
@@ -123,6 +158,79 @@ class CWGCClient():
         cemetery['locality'] = self._get_field_value(soup, 'Locality:')
         return cemetery
 
+    def search(self, page=None, **kwargs):
+        ''' Search the db for matching results. '''
+        if page and self.br:
+            html = self._get_page(page)
+        elif kwargs:
+            self._prepare_search(**kwargs)
+            html = self._do_search()
+            if page:
+                html = self._get_page(page)
+        else:
+            raise UsageError('No search parameters were provided.')
+        results = self._process_page(html)
+        return {'results': results}
+
+    def _create_browser(self):
+        self.br = mechanize.Browser()
+        self.br.addheaders = [('User-agent',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_8_2) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.52 Safari/537.17')]
+        self.br.set_handle_robots(False)
+        self.br.set_handle_equiv(True)
+        self.br.set_handle_gzip(True)
+        self.br.set_handle_redirect(True)
+        self.br.set_handle_referer(True)
+        self.br.set_handle_refresh(mechanize._http.HTTPRefreshProcessor(), max_time=1)
+
+    def _prepare_search(self, **kwargs):
+        self._create_browser()
+        self.br.open(self.SEARCH_URL)
+        for f in self.br.forms():
+            print f
+        self.br.select_form(nr=0)
+        for key, value in kwargs.items():
+            self.br.form[self.FORM_FIELDS[key]] = value
+
+    def _do_search(self):
+        response = self.br.submit("ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$btnSearch")
+        html = response.read()
+        return html
+
+    def _get_page(self, page):
+        response = self.br.open('{}?cpage={}'.format(self.SEARCH_URL, page))
+        html = response.read()
+        return html
+
+    def _process_page(self, html):
+        #print html
+        soup = BeautifulSoup(html)
+        rows = soup.find(id='dataTable').tbody.find_all('tr')
+        results = []
+        for row in rows:
+            results.append(self._process_row(row))
+        return results
+
+    def _get_cell(self, cell):
+        try:
+            value = cell.string.strip()
+        except AttributeError:
+            value = None
+        return value
+
+    def _process_row(self, row):
+        result = {}
+        cells = row.find_all('td')
+        result['name'] = cells[0].a.string.strip()
+        result['id'] = cells[0].a['href']
+        for cell, field in enumerate(self.RESULTS_FIELDS):
+            result[field] = self._get_cell(cells[cell])
+        return result
+
 
 class ServerError(Exception):
+    pass
+
+
+class UsageError(Exception):
     pass
