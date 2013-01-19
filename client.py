@@ -3,7 +3,7 @@ from urllib2 import urlopen, Request, HTTPError
 import urllib
 import mechanize
 import sys
-import cookielib
+import re
 
 import logging
 
@@ -170,7 +170,8 @@ class CWGCClient():
         else:
             raise UsageError('No search parameters were provided.')
         results = self._process_page(html)
-        return {'results': results}
+        total_results = self._get_total_results(html)
+        return {'results': results, 'total_results': total_results}
 
     def _create_browser(self):
         self.br = mechanize.Browser()
@@ -226,6 +227,15 @@ class CWGCClient():
         for cell, field in enumerate(self.RESULTS_FIELDS):
             result[field] = self._get_cell(cells[cell])
         return result
+
+    def _get_total_results(self, html):
+        soup = BeautifulSoup(html)
+        try:
+            totals = soup.find(id='ContentPlaceHolderDefault_cpMain_ctlCasualtySearch_pnlPaginationTop').p.string
+            total = re.search(r'(\d+) record', totals).group(1)
+        except AttributeError:
+            total = None
+        return total
 
 
 class ServerError(Exception):
