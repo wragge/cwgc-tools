@@ -7,9 +7,9 @@ import re
 
 import logging
 
-logger = logging.getLogger("mechanize")
-logger.addHandler(logging.StreamHandler(sys.stdout))
-logger.setLevel(logging.DEBUG)
+#logger = logging.getLogger("mechanize")
+#logger.addHandler(logging.StreamHandler(sys.stdout))
+#logger.setLevel(logging.DEBUG)
 
 
 class CWGCClient():
@@ -105,7 +105,6 @@ class CWGCClient():
     def _get_service(self, soup):
         ''' Get service and unit details. '''
         service = self._get_field_value(soup, 'Regiment/Service:')
-        print soup.find_all('dt')
         unit = self._get_field_value(soup, '\xc2\xa0')
         return {'service': service, 'unit': unit}
 
@@ -158,15 +157,15 @@ class CWGCClient():
         cemetery['locality'] = self._get_field_value(soup, 'Locality:')
         return cemetery
 
-    def search(self, page=None, **kwargs):
+    def search(self, page=None, sort='name', **kwargs):
         ''' Search the db for matching results. '''
         if page and self.br:
             html = self._get_page(page)
         elif kwargs:
             self._prepare_search(**kwargs)
-            html = self._do_search()
+            html = self._do_search(sort)
             if page:
-                html = self._get_page(page)
+                html = self._get_page(page, sort)
         else:
             raise UsageError('No search parameters were provided.')
         results = self._process_page(html)
@@ -187,29 +186,33 @@ class CWGCClient():
     def _prepare_search(self, **kwargs):
         self._create_browser()
         self.br.open(self.SEARCH_URL)
-        for f in self.br.forms():
-            print f
         self.br.select_form(nr=0)
         for key, value in kwargs.items():
             self.br.form[self.FORM_FIELDS[key]] = value
 
-    def _do_search(self):
+    def _do_search(self, sort):
         response = self.br.submit("ctl00$ctl00$ctl00$ContentPlaceHolderDefault$cpMain$ctlCasualtySearch$btnSearch")
+        if sort:
+            response = self.br.open('{}?sort={}&order=asc'.format(self.SEARCH_URL, sort))
         html = response.read()
         return html
 
-    def _get_page(self, page):
-        response = self.br.open('{}?cpage={}'.format(self.SEARCH_URL, page))
+    def _get_page(self, page, sort):
+        response = self.br.open('{}?cpage={}&sort={}&order=asc'.format(self.SEARCH_URL, page, sort))
         html = response.read()
         return html
 
     def _process_page(self, html):
-        #print html
         soup = BeautifulSoup(html)
-        rows = soup.find(id='dataTable').tbody.find_all('tr')
         results = []
-        for row in rows:
-            results.append(self._process_row(row))
+        try:
+            rows = soup.find(id='dataTable').tbody.find_all('tr')
+        except AttributeError:
+            # No results
+            pass
+        else:
+            for row in rows:
+                results.append(self._process_row(row))
         return results
 
     def _get_cell(self, cell):
@@ -222,10 +225,11 @@ class CWGCClient():
     def _process_row(self, row):
         result = {}
         cells = row.find_all('td')
-        result['name'] = cells[0].a.string.strip()
-        result['id'] = cells[0].a['href']
+        result['name'] = cells[0].a.string.strip().title()
+        result['id'] = self.CWGC_URL + cells[0].a['href']
         for cell, field in enumerate(self.RESULTS_FIELDS):
-            result[field] = self._get_cell(cells[cell])
+            if cell != 0:
+                result[field] = self._get_cell(cells[cell])
         return result
 
     def _get_total_results(self, html):
